@@ -16,7 +16,11 @@ import subprocess
 import yaml
 import matplotlib.pyplot as plt
 from mpl_toolkits.basemap import Basemap
+from scipy import interpolate
 from argparse import ArgumentParser
+from PIL import Image
+
+YMLFN = ''
 
 def getNeighbours(image,i,j):
     nbg = []
@@ -170,23 +174,28 @@ def plotImage(x,y,z, time=0, clim=[], cmap='jet', save_dir=''):
 #    im.save('mptest18/{}.tif'.format(time))
     plt.close(fig)
     
-def plotImageMap(m,ax, xgrid,ygrid,z,time=0,clim=[],cmap='jet',save_dir=''):
+def plotImageMap(m,ax, xgrid,ygrid,z,time=0,clim=[],cmap='jet',
+                 save_dir='', totality=False, raw_image=False):
     
     title = datetime.datetime.utcfromtimestamp(time)
     ax.set_title(title)
     x,y = m(xgrid, ygrid)
     Zm = ma.masked_where(np.isnan(z),z)
     gca = m.pcolormesh(x,y,Zm, cmap='jet')
-    plotTotalityMask(m, time)
+    if totality:
+        plotTotalityMask(m, time)
     gca.set_clim(clim)
     plt.colorbar(gca)
     if save_dir is not None:
         checkImagePath(save_dir)
         plt.savefig('{}{}.png'.format(save_dir,time))
+    if raw_image:
+        checkImagePath(save_dir+'tif')
+        im = Image.fromarray(Zm)
+        im.save('{}tif/{}.tif'.format(save_dir,time))
 
 def singleImage(i):
-    
-    stream = yaml.load(open('plottinparams.yaml', 'r'))
+    stream = yaml.load(open(YMLFN, 'r'))
     fname = stream.get('hdffilename')
     f = h5py.File(fname, 'r')
     ylim = stream.get('ylim')
@@ -201,6 +210,8 @@ def singleImage(i):
     image_mask_size = stream.get('image_mask_size')
     image_filter_type = stream.get('image_filter_type')
     clim = stream.get('clim')
+    totality_mask = stream.get('totality_mask')
+    raw_image = stream.get('raw_image')
     t = f['obstimes'].value
     
     xgrid, ygrid, im = makeGrid(ylim=ylim, xlim=xlim, res=im_resolution)
@@ -231,7 +242,8 @@ def singleImage(i):
         im = imageFilter(im, mask_size=image_mask_size, ftype=image_filter_type)
         
     fig, ax, m = plotMap()
-    plotImageMap(m,ax,xgrid,ygrid,im,time=t[i],clim=clim,cmap='jet',save_dir=save_dir)
+    plotImageMap(m,ax,xgrid,ygrid,im,time=t[i],clim=clim,cmap='jet',
+                 save_dir=save_dir, totality=totality_mask, raw=raw_image)
     plt.close(fig)
 
 def runImaging(f, iterate):
@@ -240,10 +252,12 @@ def runImaging(f, iterate):
         p.start()
         p.join()
 
-def main(config_file=None, datafile='',svdir=''):
-    if svdir == '':
-        svdir = 'images/'
-    if config_file == None:
+def main(config_file=None, datafile='', svdir='', tiff=False):
+    global YMLFN
+    
+    if config_file is None:
+        if svdir == '':
+            svdir = 'images/'
         if datafile == '':
             datafile = '/media/smrak/Eclipse2017/Eclipse/hdf/linecut_trial_130_60_imode2_ed1000_14.h5'
         
@@ -264,12 +278,14 @@ def main(config_file=None, datafile='',svdir=''):
         
         skipimage = 3
         
-        yaml_fn = 'plottinparams.yaml'
+        YMLFN = 'plottinparams.yaml'
         datadict = {'hdffilename': datafile, 
+                    'decimate': decimate,
                     'xlim':xlim, 
                     'ylim':ylim, 
                     'im_resolution':im_resolution,
                     'delta': delta,
+                    'skip_image': skipimage,
                     'save_dir': svdir, 
                     'fill_pixel_iter': fill_pixel_iter,
                     'image_interpolate': image_interpolate,
@@ -277,13 +293,20 @@ def main(config_file=None, datafile='',svdir=''):
                     'interpolate_resolution': interpolate_resolution,
                     'image_filter_type': image_filter_type,
                     'image_mask_size': image_mask_size,
-                    'clim': clim}
-        with open(yaml_fn, 'w') as outfile:
+                    'clim': clim,
+                    'raw_image': tiff}
+        with open(YMLFN, 'w') as outfile:
             yaml.dump(datadict, outfile, default_flow_style=True) 
-        
+    else:
+        YMLFN = config_file
+        stream = yaml.load(open(config_file, 'r'))
+        decimate = stream.get('decimate')
+        skipimage = stream.get('skip_image')
+        datafile = stream.get('hdffilename')
+    
     f = h5py.File(datafile, 'r')
     timearray = f['obstimes'].value
-    iterate = np.arange(decimate*10, timearray.shape[0]-decimate, decimate*skipimage)
+    iterate = np.arange(int(decimate), timearray.shape[0]-decimate, decimate*skipimage)
     runImaging(datafile,iterate)
 
     
@@ -296,50 +319,8 @@ if __name__ == '__main__':
                    default=None)
     p.add_argument('-s', "--save_directory", help='path for directory to save images',
                    default='', type=str)
+    p.add_argument('--raw', "--raw", help="save raw images as.tif", default=False)
    
     P = p.parse_args()
-    
-    main(config_file=P.cfg_yaml_file, datafile=P.data_file,svdir=P.save_directory)
-#    
-#    downloadObsRinexList(state = P.state, day=P.day, folder=P.dest_folder, t=P.type, filepath=P.path)
-#
-#    decimate = 30
-#    skip = 3
-#    delta = int(decimate/2)
-#    im_resolution = 0.5
-#    interpolate_resolution = 0.25
-#    
-#    ylim=[22,50]
-#    xlim=[-125,-65]
-#    clim = [-0.2, 0.2]
-#    
-#    fill_pixel_iter = 5
-#    image_interpolate = True
-#    interpolate_method = 'nearest'
-#    image_filter_type = 'median'
-#    image_mask_size = 7
-#    
-#    SVDIR = '/media/smrak/Eclipse2017/Eclipse/pic/130_60/interpolate_mean/'
-##    SVDIR = 'interpolate_mean/'
-#    
-#    yaml_fn = 'plottinparams.yaml'
-#    datadict = {'hdffilename': fdir+file, 
-#                'xlim':xlim, 
-#                'ylim':ylim, 
-#                'im_resolution':im_resolution,
-#                'delta': delta,
-#                'save_dir': SVDIR, 
-#                'fill_pixel_iter': fill_pixel_iter,
-#                'image_interpolate': image_interpolate,
-#                'interpolate_method': interpolate_method,
-#                'interpolate_resolution': interpolate_resolution,
-#                'image_filter_type': image_filter_type,
-#                'image_mask_size': image_mask_size,
-#                'clim': clim}
-#    with open(yaml_fn, 'w') as outfile:
-#        yaml.dump(datadict, outfile, default_flow_style=True) 
-#
-#    f = h5py.File(fdir+file, 'r')
-#    timearray = f['obstimes'].value
-#    iterate = np.arange(decimate*10, timearray.shape[0]-decimate, decimate*skip)
-#    runImaging(fdir+file,iterate)
+#    print (P.save_directory)
+    main(config_file=P.cfg_yaml_file, datafile=P.data_file,svdir=P.save_directory, tiff=P.raw)
