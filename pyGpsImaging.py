@@ -21,8 +21,11 @@ from argparse import ArgumentParser
 from PIL import Image
 
 YMLFN = ''
-
+# %% Util Functions
 def getNeighbours(image,i,j):
+    """
+    Return an array of <=9 neighbour pixel of an image with a center at (i,j)
+    """
     nbg = []
     for k in np.arange(i-1, i+2):
         for l in np.arange(j-1, j+2):
@@ -33,6 +36,11 @@ def getNeighbours(image,i,j):
     return np.array(nbg)
 
 def filterMask(im,i,j, mask_size=3, ftype='mean'):
+    """
+    Return a filterd vaule of a pixel from the image im(i,j). Varaible mask size 
+    and  filter type.
+    TO DO: implement Gaussian filter
+    """
     nbg = []
     for k in np.arange(i-1, i+mask_size-1):
         for l in np.arange(j-1, j+mask_size-1):
@@ -47,6 +55,11 @@ def filterMask(im,i,j, mask_size=3, ftype='mean'):
         return np.median(np.array(nbg))
 
 def imageFilter(im, mask_size=3, ftype='mean'):
+    """
+    Go throught the image anf filter it with a given type and mask size. It is necessary
+    to filter the image like this due to scipy.im_filter sensetivity to NaN values.
+    It is kidna slow, mak a C++ function?
+    """
     im_filt = im.copy()
     for i in np.arange(0,im.shape[0]):
         for j in np.arange(0,im.shape[1]):
@@ -54,11 +67,18 @@ def imageFilter(im, mask_size=3, ftype='mean'):
     return im_filt
             
 def fillPixels(im, N=1):
+    """
+    Fill in the dead pixels. If a dead pixel has a least 4 finite neighbour
+    pixel, than replace the center pixel with a mean valuse of the neighbours
+    """
     for n in range(N):
         for i in np.arange(0,im.shape[0]):
             for j in np.arange(0,im.shape[1]):
+                # Check if th epixel is dead, i.e. empty
                 if np.isnan(im[i,j]):
+                    # Get its neighbours as a np array
                     nbg = getNeighbours(im,i,j)
+                    # If there are at leas 4 neighbours, replace the value with a mean
                     if sum(np.isfinite(nbg)) >= 4:
                         ix = np.where(np.isfinite(nbg))[0]
                         avg = np.mean(nbg[ix])
@@ -66,6 +86,10 @@ def fillPixels(im, N=1):
     return im
 
 def interpolateImage(im, xgrid=0, ygrid=0, res=1, method='cubic'):
+    """
+    Interpolate function, resample it with a new resolution and/or interpolate
+    dead pixels. Use cubic, nearest or lienar methods.
+    """
     im_mask = np.ma.masked_invalid(im)
     
     xd = abs(xgrid[0,0] - xgrid[-1,0]) / res * 1j
@@ -82,6 +106,9 @@ def interpolateImage(im, xgrid=0, ygrid=0, res=1, method='cubic'):
     return xgrid2, ygrid2, GD
 
 def makeGrid(ylim=[25,50],xlim=[-110,-80],res=0.5):
+    """
+    Make a grid for an image with a given boundaries and resolution
+    """
     xd = abs(xlim[0] - xlim[1]) / res * 1j
     yd = abs(ylim[0] - ylim[1]) / res * 1j
     xgrid, ygrid = np.mgrid[xlim[0]:xlim[1]:xd, ylim[0]:ylim[1]:yd]
@@ -90,6 +117,10 @@ def makeGrid(ylim=[25,50],xlim=[-110,-80],res=0.5):
     return xgrid, ygrid, z
 
 def returnIndex(x, i, delta):
+    """
+    Return right index for a time array from a minor array with a sapn of
+    i pm delta.
+    """
     if sum(sum(np.isfinite(x))) > 0:
         idval = np.where(np.isfinite(x))[0][0]
         lst = np.arange(i-delta,i+delta,1)
@@ -99,6 +130,10 @@ def returnIndex(x, i, delta):
         return np.nan
     
 def getImageIndex(x, y, xlim, ylim, xgrid, ygrid):
+    """
+    find and return a pixel location on the image to map the LOS value. find the
+    pixel which minimizes the distance in x and y direction
+    """
     if x > xlim[0] and x < xlim[1] and y > ylim[0] and y < ylim[1]:
         idy = abs(ygrid[0,:] - y).argmin()
         idx = abs(xgrid[:,0] - x).argmin()
@@ -110,8 +145,12 @@ def getImageIndex(x, y, xlim, ylim, xgrid, ygrid):
 def checkImagePath(save_dir):
     if not os.path.exists(save_dir):
         subprocess.call('mkdir {}'.format(save_dir), shell=True)
-        
+# %% Plotting Utils
 def plotTotalityMask(m,time):
+    """
+    Get the totality coordinates. Remark: this is a totality on the ground!
+    Reference: NASA web page
+    """
     totality_path = h5py.File('/home/smrak/Documents/eclipse/totality.h5', 'r')
     lat = totality_path['path/center_lat'].value
     lon = totality_path['path/center_lon'].value
@@ -132,14 +171,14 @@ def plotMap(latlim=[20, 65], lonlim=[-160, -70], center=[39, -86],
             parallels=[20,30,40,50], 
             meridians = [-120,-110, -100, -90, -80,-70],
             epoto=False, totality=True):
-    
+    """
+    Plot the map and return handlers of the figure
+    """
     (fig,ax) = plt.subplots(1,1,facecolor='w', figsize=(12,8))
     m = Basemap(lat_0=40, lon_0=-95,llcrnrlat=latlim[0],urcrnrlat=latlim[1],
                 llcrnrlon=lonlim[0],urcrnrlon=lonlim[1],
                 projection='merc')#, resolution='i', ax=ax)
     
-#    m.drawparallels(parallels,labels=[False, True, True, True], linewidth=1)
-#    m.drawmeridians(meridians,labels=[True,True,False,True], linewidth=1)
     m.drawcoastlines()
     m.drawstates()
     m.drawcountries()
@@ -161,27 +200,30 @@ def plotMap(latlim=[20, 65], lonlim=[-160, -70], center=[39, -86],
     return fig, ax, m
 
 def plotImage(x,y,z, time=0, clim=[], cmap='jet', save_dir=''):
+    """
+    Plot just an image
+    """
     fig = plt.figure(figsize=(12,12))
     title = datetime.datetime.utcfromtimestamp(time)
     plt.title(title)
     Zm = ma.masked_where(np.isnan(z),z)
     plt.pcolormesh(x, y, Zm, cmap=cmap)
-#    im = Image.fromarray(Zm)
-#    plt.pcolormesh(x, y, Zm, edgecolor='w', lw=0.005, cmap=cmap)
     plt.clim(clim)
     plt.colorbar()
     plt.savefig('{}{}.png'.format(save_dir,time))
-#    im.save('mptest18/{}.tif'.format(time))
     plt.close(fig)
     
 def plotImageMap(m,ax, xgrid,ygrid,z,time=0,clim=[],cmap='jet',
                  save_dir='', totality=False, raw_image=False):
-    
+    """
+    Plot the image on the basemap
+    """
     title = datetime.datetime.utcfromtimestamp(time)
     ax.set_title(title)
     x,y = m(xgrid, ygrid)
     Zm = ma.masked_where(np.isnan(z),z)
     gca = m.pcolormesh(x,y,Zm, cmap='jet')
+    # If you want to plot totality and concentric circles?
     if totality:
         plotTotalityMask(m, time)
     gca.set_clim(clim)
@@ -194,12 +236,22 @@ def plotImageMap(m,ax, xgrid,ygrid,z,time=0,clim=[],cmap='jet',
         im = Image.fromarray(Zm)
         im.save('{}tif/{}.tif'.format(save_dir,time))
 
+# %% Gather the data for a single frame
 def singleImage(i):
+    """
+    Produse a single image given a HDF data file. An inpit 'i' is an argumnet for
+    a given time stamp.
+    """
     stream = yaml.load(open(YMLFN, 'r'))
     fname = stream.get('hdffilename')
     f = h5py.File(fname, 'r')
+    t = f['obstimes'].value
+    
+    ylimmap = stream.get('ylimmap')
+    xlimmap = stream.get('xlimmap')
     ylim = stream.get('ylim')
     xlim = stream.get('xlim')
+    
     im_resolution = stream.get('im_resolution')
     save_dir = stream.get('save_dir')
     delta = stream.get('delta')
@@ -210,51 +262,64 @@ def singleImage(i):
     image_mask_size = stream.get('image_mask_size')
     image_filter_type = stream.get('image_filter_type')
     clim = stream.get('clim')
-    totality_mask = stream.get('totality_mask')
+    totality_mask = stream.get('totality')
     raw_image = stream.get('raw_image')
-    t = f['obstimes'].value
     
+    # Create an image grids
     xgrid, ygrid, im = makeGrid(ylim=ylim, xlim=xlim, res=im_resolution)
     for k in f.keys():
         if k != 'obstimes':
+            # find index of the closest entry in the array to the given time index.
+            # Search in the range +- delta around the given time index
             tmp = f[k+'/lat'][i-delta : i+delta]
             idt = returnIndex(tmp, i, delta)
+            # If idt index exists (non empty)
             if np.isfinite(idt):
+                # Retreive the data from a file
                 lat = f[k+'/lat'][idt]
                 lon = f[k+'/lon'][idt]
                 residual = f[k+'/res'][idt]
-                
+                # Find the image index (pixel) that correcponds to the LOS value
                 for j in np.where(np.isfinite(residual))[0]:
                     idx, idy = getImageIndex(x = lon[j], y = lat[j],
                                              xlim = xlim, ylim = ylim,
                                              xgrid = xgrid, ygrid = ygrid)
-
+                    # If image indexes are valid
                     if np.isfinite(idx) and np.isfinite(idy):
+                        # Assign the value to the pixel
                         if np.isnan(im[idx,idy]):
                             im[idx,idy] = residual[j]
+                        # If this is not the first value to assign, assign a
+                        # mean of both values
                         else:
                             im[idx,idy] = (im[idx,idy] + residual[j]) / 2
+    # Raw image Done. Now first fill the empty pixel N-times
     if fillpixel_iter > 0:
         im = fillPixels(im, N=fillpixel_iter)
+    # Reinterpolate the image? witah a new resolution and a given interpolation method
     if image_interpolate:
         xgrid, ygrid, im = interpolateImage(im, xgrid, ygrid,res=interpolate_resolution, method=interpolate_method)
+    # Filter the image with a median or mean filter with a given size of the filter mask
     if image_filter_type is not None:
         im = imageFilter(im, mask_size=image_mask_size, ftype=image_filter_type)
-        
-    fig, ax, m = plotMap()
+    # Plot the background basemap 
+    fig, ax, m = plotMap(lonlim=xlimmap, latlim=ylimmap)
+    # Plot the Image
     plotImageMap(m,ax,xgrid,ygrid,im,time=t[i],clim=clim,cmap='jet',
-                 save_dir=save_dir, totality=totality_mask, raw=raw_image)
+                 save_dir=save_dir, totality=totality_mask, raw_image=raw_image)
+    # Close the figure handler
     plt.close(fig)
 
+# %% Parallel handler
 def runImaging(f, iterate):
     for i in iterate:
         p = multiprocessing.Process(target=singleImage, args=(i,))
         p.start()
         p.join()
-
-def main(config_file=None, datafile='', svdir='', tiff=False):
+# %% Main program, get the parameters and start the imaging script
+def main(config_file=None, datafile='', svdir='', N=False):
     global YMLFN
-    
+    # Create a sample config file if there is no template
     if config_file is None:
         if svdir == '':
             svdir = 'images/'
@@ -278,6 +343,9 @@ def main(config_file=None, datafile='', svdir='', tiff=False):
         
         skipimage = 3
         
+        totality = False
+        raw_image = False
+        #Make a sample yaml cfg file
         YMLFN = 'plottinparams.yaml'
         datadict = {'hdffilename': datafile, 
                     'decimate': decimate,
@@ -294,7 +362,8 @@ def main(config_file=None, datafile='', svdir='', tiff=False):
                     'image_filter_type': image_filter_type,
                     'image_mask_size': image_mask_size,
                     'clim': clim,
-                    'raw_image': tiff}
+                    'raw_image': raw_image,
+                    'totality': totality}
         with open(YMLFN, 'w') as outfile:
             yaml.dump(datadict, outfile, default_flow_style=True) 
     else:
@@ -304,11 +373,18 @@ def main(config_file=None, datafile='', svdir='', tiff=False):
         skipimage = stream.get('skip_image')
         datafile = stream.get('hdffilename')
     
+    # If the cfg file is given, read it
     f = h5py.File(datafile, 'r')
+    # Get the obseration time boundaries
     timearray = f['obstimes'].value
+    # Crate an itarate array with indexes
     iterate = np.arange(int(decimate), timearray.shape[0]-decimate, decimate*skipimage)
-    runImaging(datafile,iterate)
-
+    # Plot only a given N first frames from the file?
+    if N != False:
+        runImaging(datafile,iterate[:int(N)])
+    # Plot them all!
+    else:
+        runImaging(datafile,iterate)
     
 if __name__ == '__main__':
     
@@ -319,8 +395,9 @@ if __name__ == '__main__':
                    default=None)
     p.add_argument('-s', "--save_directory", help='path for directory to save images',
                    default='', type=str)
-    p.add_argument('--raw', "--raw", help="save raw images as.tif", default=False)
+    p.add_argument('--Nimage', "--number_of_images", help='Plot just a given number of images',
+                   default=False)
    
     P = p.parse_args()
-#    print (P.save_directory)
-    main(config_file=P.cfg_yaml_file, datafile=P.data_file,svdir=P.save_directory, tiff=P.raw)
+    # Run
+    main(config_file=P.cfg_yaml_file, datafile=P.data_file,svdir=P.save_directory, N=P.Nimage)
