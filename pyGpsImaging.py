@@ -199,19 +199,24 @@ def plotMap(latlim=[20, 65], lonlim=[-160, -70], center=[39, -86],
         
     return fig, ax, m
 
-def plotImage(x,y,z, time=0, clim=[], cmap='jet', save_dir=''):
+def plotImage(x,y,z, time=0, clim=[], cmap='jet', save_dir='', raw_image=False):
     """
     Plot just an image
     """
     fig = plt.figure(figsize=(12,12))
-    title = datetime.datetime.utcfromtimestamp(time)
-    plt.title(title)
     Zm = ma.masked_where(np.isnan(z),z)
     plt.pcolormesh(x, y, Zm, cmap=cmap)
     plt.clim(clim)
     plt.colorbar()
-    plt.savefig('{}{}.png'.format(save_dir,time))
-    plt.close(fig)
+    if raw_image:
+        checkImagePath(save_dir+'tif')
+        im = Image.fromarray(Zm)
+        im.save('{}tif/{}.tif'.format(save_dir,time))
+    else:
+        title = datetime.datetime.utcfromtimestamp(time)
+        plt.title(title)
+        plt.savefig('{}{}.png'.format(save_dir,time))
+    return fig
     
 def plotImageMap(m,ax, xgrid,ygrid,z,time=0,clim=[],cmap='jet',
                  save_dir='', totality=False, raw_image=False):
@@ -263,6 +268,8 @@ def singleImage(i):
     image_filter_type = stream.get('image_filter_type')
     clim = stream.get('clim')
     totality_mask = stream.get('totality')
+    eclipse = stream.get('eclipse')
+    basemap_image = stream.get('basemap_image')
     raw_image = stream.get('raw_image')
     
     # Create an image grids
@@ -302,20 +309,26 @@ def singleImage(i):
     # Filter the image with a median or mean filter with a given size of the filter mask
     if image_filter_type is not None:
         im = imageFilter(im, mask_size=image_mask_size, ftype=image_filter_type)
-    # Plot the background basemap 
-    fig, ax, m = plotMap(lonlim=xlimmap, latlim=ylimmap)
-    # Plot the Image
-    plotImageMap(m,ax,xgrid,ygrid,im,time=t[i],clim=clim,cmap='jet',
-                 save_dir=save_dir, totality=totality_mask, raw_image=raw_image)
-    # Close the figure handler
-    plt.close(fig)
+    if basemap_image:
+        # Plot the background basemap 
+        fig, ax, m = plotMap(lonlim=xlimmap, latlim=ylimmap, totality=eclipse)
+        # Plot the Image
+        fig = plotImageMap(m,ax,xgrid,ygrid,im,time=t[i],clim=clim,cmap='jet',
+                           save_dir=save_dir, totality=totality_mask)
+        # Close the figure handler
+        plt.close(fig)
+    if raw_image:
+        fig = plotImage(xgrid,ygrid,im,time=t[i],clim=clim, save_dir=save_dir,
+                        raw_image=raw_image)
+        # Close the figure handler
+        plt.close(fig)
 
 # %% Parallel handler
 def runImaging(f, iterate):
     for i in iterate:
         p = multiprocessing.Process(target=singleImage, args=(i,))
         p.start()
-        p.join()
+        p.join(60) # Timeout = 1 min
 # %% Main program, get the parameters and start the imaging script
 def main(config_file=None, datafile='', svdir='', N=False):
     global YMLFN
@@ -344,6 +357,8 @@ def main(config_file=None, datafile='', svdir='', N=False):
         skipimage = 3
         
         totality = False
+        eclipse = False
+        basemap_image = True
         raw_image = False
         #Make a sample yaml cfg file
         YMLFN = 'plottinparams.yaml'
@@ -362,7 +377,9 @@ def main(config_file=None, datafile='', svdir='', N=False):
                     'image_filter_type': image_filter_type,
                     'image_mask_size': image_mask_size,
                     'clim': clim,
+                    'basemap_image': basemap_image,
                     'raw_image': raw_image,
+                    'eclipse': eclipse,
                     'totality': totality}
         with open(YMLFN, 'w') as outfile:
             yaml.dump(datadict, outfile, default_flow_style=True) 
