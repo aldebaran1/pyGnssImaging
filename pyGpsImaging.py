@@ -11,16 +11,21 @@ import os
 import numpy.ma as ma
 import datetime
 import h5py
+import ephem
+import glob
 import multiprocessing  
 import subprocess
 import yaml
+import scipy.ndimage
 import matplotlib.pyplot as plt
 from mpl_toolkits.basemap import Basemap
+from pymap3d.coordconv3d import aer2geodetic
 from scipy import interpolate
 from argparse import ArgumentParser
 from PIL import Image
 
 YMLFN = ''
+EUVDIR = '/home/smrak/Documents/eclipse/MapsSDOdisk/'
 # %% Util Functions
 def getNeighbours(image,i,j):
     """
@@ -146,7 +151,50 @@ def checkImagePath(save_dir):
     if not os.path.exists(save_dir):
         subprocess.call('mkdir {}'.format(save_dir), shell=True)
 # %% Plotting Utils
-def plotTotalityMask(m,time):
+def getMoonPosition(date, ipp_alt=300):
+    """
+    Sebasitjan Mrak
+    """
+    moon = ephem.Moon()
+    obs = ephem.Observer()
+    obs.date = date
+    boston = ephem.city('Boston')
+    obs.lat = boston.lat
+    obs.long = boston.long
+    obs.elev = boston.elev
+    moon.compute(obs)
+
+    r = ipp_alt / np.sin(moon.alt)
+    
+    lla_vector = np.array(aer2geodetic(np.rad2deg(moon.az), np.rad2deg(moon.alt), r, 
+                                       np.rad2deg(obs.lat), np.rad2deg(obs.lon), np.rad2deg(obs.elev)))
+    return lla_vector
+
+def getEUVMaskCoordinates(latlim=[-89.5,89.5],lonlim=[-180,180],nlat=180,nlon=360):
+    xgrid, ygrid = np.mgrid[lonlim[0]:lonlim[1]:nlon*1j, latlim[0]:latlim[1]:nlat*1j]
+    return xgrid,ygrid
+
+def getEUVMask(time,nlat=180,nlon=360):
+    """
+    I: time in posix
+    """
+    global EUVDIR
+    xgrid, ygrid = getEUVMaskCoordinates(nlat=nlat, nlon=nlon)
+    npts = nlat*nlon
+    #Import EUV mask files
+    flist = np.sort(glob.glob(EUVDIR+'*.bin'))
+    Tframe_full = datetime.datetime.utcfromtimestamp(time)
+    if int(Tframe_full.strftime('%H')) >= 16 and int(Tframe_full.strftime('%H')) < 22:
+        # find right filename extension
+        TframeHM = Tframe_full.strftime('%H%M')
+        flist = np.sort(glob.glob(EUVDIR+'*'+TframeHM+'.bin'))
+        # Get Mask
+        data = np.fromfile(flist[0],count=npts, dtype=np.float32).reshape((nlat,nlon))
+        return xgrid, ygrid, data
+    else:
+        return 0, 0, 0
+
+def plotTotalityMask(m,time,):
     """
     Get the totality coordinates. Remark: this is a totality on the ground!
     Reference: NASA web page
@@ -163,14 +211,16 @@ def plotTotalityMask(m,time):
         m.scatter(x, y, s=120, facecolors='none', edgecolors='m', linewidth=2)
         m.scatter(x, y, s=1500, facecolors='none', edgecolors='k', linewidth=0.5, linestyle='--')
         m.scatter(x, y, s=15000, facecolors='none', edgecolors='k', linewidth=0.5, linestyle='--')
-        m.scatter(x, y, s=200000, facecolors='none', edgecolors='k', linewidth=0.5, linestyle='--')
-        m.scatter(x, y, s=250000, facecolors='none', edgecolors='k', linewidth=0.5, linestyle='--')
-        m.scatter(x, y, s=300000, facecolors='none', edgecolors='k', linewidth=0.5, linestyle='--')
+        m.scatter(x, y, s=60000, facecolors='none', edgecolors='k', linewidth=0.5, linestyle='--')
+#        m.scatter(x, y, s=200000, facecolors='none', edgecolors='k', linewidth=0.5, linestyle='--')
+#        m.scatter(x, y, s=250000, facecolors='none', edgecolors='k', linewidth=0.5, linestyle='--')
+#        m.scatter(x, y, s=300000, facecolors='none', edgecolors='k', linewidth=0.5, linestyle='--')
+    return m
 
 def plotMap(latlim=[20, 65], lonlim=[-160, -70], center=[39, -86],
             parallels=[20,30,40,50], 
             meridians = [-120,-110, -100, -90, -80,-70],
-            epoto=False, totality=True):
+            epoto=False, totality=True, time=None):
     """
     Plot the map and return handlers of the figure
     """
@@ -178,12 +228,17 @@ def plotMap(latlim=[20, 65], lonlim=[-160, -70], center=[39, -86],
     m = Basemap(lat_0=40, lon_0=-95,llcrnrlat=latlim[0],urcrnrlat=latlim[1],
                 llcrnrlon=lonlim[0],urcrnrlon=lonlim[1],
                 projection='merc')#, resolution='i', ax=ax)
+    m.drawmapboundary(fill_color='grey')
     
-    m.drawcoastlines()
-    m.drawstates()
-    m.drawcountries()
+    m.drawcoastlines(color='#006600')
+    m.drawstates(color='#006600')
+    m.drawcountries(color='#006600')
     if epoto == True:
         m.etopo()
+        
+    if time is not None:
+        title = datetime.datetime.utcfromtimestamp(time)
+        ax.set_title(title)
     
     if totality:
         totality_path = h5py.File('/home/smrak/Documents/eclipse/totality.h5', 'r')
@@ -196,7 +251,6 @@ def plotMap(latlim=[20, 65], lonlim=[-160, -70], center=[39, -86],
         X2,Y2 = m(south_lon, south_lat)
         m.plot(X1,Y1, c='b')
         m.plot(X2,Y2, c='b')
-        
     return fig, ax, m
 
 def plotImage(x,y,z, time=0, clim=[], cmap='jet', save_dir='', raw_image=False):
@@ -217,9 +271,45 @@ def plotImage(x,y,z, time=0, clim=[], cmap='jet', save_dir='', raw_image=False):
         plt.title(title)
         plt.savefig('{}{}.png'.format(save_dir,time))
     return fig
+
+def plotEUVMask(m, time, euv_gradient=True, cmap='binary', lw=0.2):
+    try:
+        xgrid, ygrid, data = getEUVMask(time)
+        x,y = m(xgrid, ygrid)
+        if euv_gradient:
+            data = scipy.ndimage.filters.laplace(data)
+            levels = np.linspace(-.02,.02,10)
+            levels = [-.02, -.016,-.012, -.008, -.005, .005, .008, .012, .016, 0.020]
+            m.contour(x,y,data.T, levels, cmap=cmap)
+        else:
+            levels = np.linspace(0,1,60)
+            m.contour(x,y,data.T, levels, colors='w', linewidths=lw)
+    except:
+        pass
+    return m
     
-def plotImageMap(m,ax, xgrid,ygrid,z,time=0,clim=[],cmap='jet',
-                 save_dir='', totality=False, raw_image=False):
+def plotMoon(m, time):
+    lla = getMoonPosition(datetime.datetime.utcfromtimestamp(time))
+    x,y = m(lla[1], lla[0])
+    m.scatter(x, y, s=120, facecolors='none', edgecolors='m', linewidth=2)
+    return m
+
+def plotScatterTEC(lat=[], lon=[], z=[], ms=10, color='k', alpha=0.6,
+                   ax=None, m=None, clim=None, cmap='jet', cbar=False,
+                   time=0, euv_mask=False, euv_gradient=False, lw=0.5):
+    if (lat.shape[0] > 0) and (lon.shape[0] > 0):
+        x,y = m(lon, lat)
+        a = m.scatter(x, y, c=z, cmap=cmap, alpha=alpha, s=ms)
+        a.set_clim(clim)
+        if euv_mask:
+            m = plotEUVMask(m, time, euv_gradient=euv_gradient, lw=lw)
+        if cbar == True:
+            plt.colorbar(a)
+    return ax, m
+
+def plotImageMap(fig,m,ax, xgrid,ygrid,z,time=0,clim=[],cmap='jet',
+                 save_dir='', totality=False, raw_image=False, euv_mask=False,
+                 moon=False, euv_gradient=False):
     """
     Plot the image on the basemap
     """
@@ -230,7 +320,11 @@ def plotImageMap(m,ax, xgrid,ygrid,z,time=0,clim=[],cmap='jet',
     gca = m.pcolormesh(x,y,Zm, cmap='jet')
     # If you want to plot totality and concentric circles?
     if totality:
-        plotTotalityMask(m, time)
+        m = plotTotalityMask(m, time)
+    if euv_mask:
+        m = plotEUVMask(m, time, euv_gradient)
+    if moon:
+        m = plotMoon(m, time)
     gca.set_clim(clim)
     plt.colorbar(gca)
     if save_dir is not None:
@@ -240,6 +334,8 @@ def plotImageMap(m,ax, xgrid,ygrid,z,time=0,clim=[],cmap='jet',
         checkImagePath(save_dir+'tif')
         im = Image.fromarray(Zm)
         im.save('{}tif/{}.tif'.format(save_dir,time))
+    
+    return fig,m,ax
 
 # %% Gather the data for a single frame
 def singleImage(i):
@@ -268,12 +364,20 @@ def singleImage(i):
     image_filter_type = stream.get('image_filter_type')
     clim = stream.get('clim')
     totality_mask = stream.get('totality')
+    euv_mask = stream.get('euv_mask')
+    euv_gradient = stream.get('euv_gradient')
     eclipse = stream.get('eclipse')
+    scatter_plot = stream.get('scatter_plot')
     basemap_image = stream.get('basemap_image')
     raw_image = stream.get('raw_image')
+    moon = stream.get('moon')
     
     # Create an image grids
     xgrid, ygrid, im = makeGrid(ylim=ylim, xlim=xlim, res=im_resolution)
+    if scatter_plot:
+        c = 0
+        # Plot the background basemap 
+        fig, ax, m = plotMap(lonlim=xlimmap, latlim=ylimmap, totality=totality_mask, time=t[i])
     for k in f.keys():
         if k != 'obstimes':
             # find index of the closest entry in the array to the given time index.
@@ -286,49 +390,68 @@ def singleImage(i):
                 lat = f[k+'/lat'][idt]
                 lon = f[k+'/lon'][idt]
                 residual = f[k+'/res'][idt]
-                # Find the image index (pixel) that correcponds to the LOS value
-                for j in np.where(np.isfinite(residual))[0]:
-                    idx, idy = getImageIndex(x = lon[j], y = lat[j],
-                                             xlim = xlim, ylim = ylim,
-                                             xgrid = xgrid, ygrid = ygrid)
-                    # If image indexes are valid
-                    if np.isfinite(idx) and np.isfinite(idy):
-                        # Assign the value to the pixel
-                        if np.isnan(im[idx,idy]):
-                            im[idx,idy] = residual[j]
-                        # If this is not the first value to assign, assign a
-                        # mean of both values
+                if scatter_plot:
+                    try:
+                        if c == 0:
+                            c += 1
+                            ax, m = plotScatterTEC(lat=lat, lon=lon, z=residual, 
+                                                   ax=ax, m=m, clim=clim, ms=3, 
+                                                   cmap='jet', euv_mask=euv_mask, cbar=True,
+                                                   time=t[i], euv_gradient=euv_gradient)
                         else:
-                            im[idx,idy] = (im[idx,idy] + residual[j]) / 2
-    # Raw image Done. Now first fill the empty pixel N-times
-    if fillpixel_iter > 0:
-        im = fillPixels(im, N=fillpixel_iter)
-    # Reinterpolate the image? witah a new resolution and a given interpolation method
-    if image_interpolate:
-        xgrid, ygrid, im = interpolateImage(im, xgrid, ygrid,res=interpolate_resolution, method=interpolate_method)
-    # Filter the image with a median or mean filter with a given size of the filter mask
-    if image_filter_type is not None:
-        im = imageFilter(im, mask_size=image_mask_size, ftype=image_filter_type)
-    if basemap_image:
+                            ax, m = plotScatterTEC(lat=lat, lon=lon, z=residual, 
+                                                   ax=ax, m=m, clim=clim, ms=3, 
+                                                   cmap='jet', cbar=False)
+                    except:
+                        pass
+                else:
+                    # Find the image index (pixel) that correcponds to the LOS value
+                    for j in np.where(np.isfinite(residual))[0]:
+                        idx, idy = getImageIndex(x = lon[j], y = lat[j],
+                                                 xlim = xlim, ylim = ylim,
+                                                 xgrid = xgrid, ygrid = ygrid)
+                        # If image indexes are valid
+                        if np.isfinite(idx) and np.isfinite(idy):
+                            # Assign the value to the pixel
+                            if np.isnan(im[idx,idy]):
+                                im[idx,idy] = residual[j]
+                            # If this is not the first value to assign, assign a
+                            # mean of both values
+                            else:
+                                im[idx,idy] = (im[idx,idy] + residual[j]) / 2
+    if not scatter_plot:
         # Plot the background basemap 
         fig, ax, m = plotMap(lonlim=xlimmap, latlim=ylimmap, totality=eclipse)
-        # Plot the Image
-        fig = plotImageMap(m,ax,xgrid,ygrid,im,time=t[i],clim=clim,cmap='jet',
-                           save_dir=save_dir, totality=totality_mask)
-        # Close the figure handler
-        plt.close(fig)
-    if raw_image:
-        fig = plotImage(xgrid,ygrid,im,time=t[i],clim=clim, save_dir=save_dir,
-                        raw_image=raw_image)
-        # Close the figure handler
-        plt.close(fig)
+        # Raw image Done. Now first fill the empty pixel N-times
+        if fillpixel_iter > 0:
+            im = fillPixels(im, N=fillpixel_iter)
+        # Reinterpolate the image? witah a new resolution and a given interpolation method
+        if image_interpolate:
+            xgrid, ygrid, im = interpolateImage(im, xgrid, ygrid,res=interpolate_resolution, method=interpolate_method)
+        # Filter the image with a median or mean filter with a given size of the filter mask
+        if image_filter_type is not None:
+            im = imageFilter(im, mask_size=image_mask_size, ftype=image_filter_type)
+        if basemap_image:
+            # Plot the Image
+            fig, m, ax = plotImageMap(fig,m,ax,xgrid,ygrid,im,clim=clim,cmap='jet',time=t[i],
+                             save_dir=save_dir, totality=totality_mask, euv_mask=euv_mask, 
+                             moon=moon)
+
+        if raw_image:
+            fig = plotImage(xgrid,ygrid,im,time=t[i],clim=clim, save_dir=save_dir,
+                            raw_image=raw_image)
+            # Close the figure handler
+            plt.close(fig)
+    else:
+        checkImagePath(save_dir)
+        plt.savefig('{}{}.png'.format(save_dir,t[i]))
 
 # %% Parallel handler
 def runImaging(f, iterate):
     for i in iterate:
         p = multiprocessing.Process(target=singleImage, args=(i,))
         p.start()
-        p.join(60) # Timeout = 1 min
+        p.join(360) # Timeout = 1 min
 # %% Main program, get the parameters and start the imaging script
 def main(config_file=None, datafile='', svdir='', N=False):
     global YMLFN
@@ -359,6 +482,7 @@ def main(config_file=None, datafile='', svdir='', N=False):
         totality = False
         eclipse = False
         basemap_image = True
+        scatter_plot = False
         raw_image = False
         #Make a sample yaml cfg file
         YMLFN = 'plottinparams.yaml'
@@ -378,6 +502,7 @@ def main(config_file=None, datafile='', svdir='', N=False):
                     'image_mask_size': image_mask_size,
                     'clim': clim,
                     'basemap_image': basemap_image,
+                    'scatter_plot': scatter_plot,
                     'raw_image': raw_image,
                     'eclipse': eclipse,
                     'totality': totality}
