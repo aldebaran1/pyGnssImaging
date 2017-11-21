@@ -25,7 +25,7 @@ from argparse import ArgumentParser
 from PIL import Image
 
 YMLFN = ''
-EUVDIR = '/home/smrak/Documents/eclipse/MapsSDOdisk/'
+EUVDIR = '/home/smrak/Documents/eclipse/MapsSDOdisk300/'
 # %% Util Functions
 def getNeighbours(image,i,j):
     """
@@ -194,7 +194,7 @@ def getEUVMask(time,nlat=180,nlon=360):
     else:
         return 0, 0, 0
 
-def plotTotalityMask(m,time,):
+def plotTotalityMask(m,time):
     """
     Get the totality coordinates. Remark: this is a totality on the ground!
     Reference: NASA web page
@@ -208,10 +208,10 @@ def plotTotalityMask(m,time,):
     if abs(Tt - time).min() < 500:
         x,y = m(lon[idt], lat[idt])
         
-        m.scatter(x, y, s=120, facecolors='none', edgecolors='m', linewidth=2)
-        m.scatter(x, y, s=1500, facecolors='none', edgecolors='k', linewidth=0.5, linestyle='--')
-        m.scatter(x, y, s=15000, facecolors='none', edgecolors='k', linewidth=0.5, linestyle='--')
-        m.scatter(x, y, s=60000, facecolors='none', edgecolors='k', linewidth=0.5, linestyle='--')
+        m.scatter(x, y, s=120, facecolors='none', edgecolors='w', linewidth=2, alpha=1)
+#        m.scatter(x, y, s=1500, facecolors='none', edgecolors='k', linewidth=0.5, linestyle='--')
+#        m.scatter(x, y, s=15000, facecolors='none', edgecolors='k', linewidth=0.5, linestyle='--')
+#        m.scatter(x, y, s=60000, facecolors='none', edgecolors='k', linewidth=0.5, linestyle='--')
 #        m.scatter(x, y, s=200000, facecolors='none', edgecolors='k', linewidth=0.5, linestyle='--')
 #        m.scatter(x, y, s=250000, facecolors='none', edgecolors='k', linewidth=0.5, linestyle='--')
 #        m.scatter(x, y, s=300000, facecolors='none', edgecolors='k', linewidth=0.5, linestyle='--')
@@ -220,7 +220,7 @@ def plotTotalityMask(m,time,):
 def plotMap(latlim=[20, 65], lonlim=[-160, -70], center=[39, -86],
             parallels=[20,30,40,50], 
             meridians = [-120,-110, -100, -90, -80,-70],
-            epoto=False, totality=True, time=None):
+            epoto=False, totality=True, totality_mask=False,time=None):
     """
     Plot the map and return handlers of the figure
     """
@@ -251,6 +251,8 @@ def plotMap(latlim=[20, 65], lonlim=[-160, -70], center=[39, -86],
         X2,Y2 = m(south_lon, south_lat)
         m.plot(X1,Y1, c='b')
         m.plot(X2,Y2, c='b')
+    if totality_mask:
+        m = plotTotalityMask(m,time)
     return fig, ax, m
 
 def plotImage(x,y,z, time=0, clim=[], cmap='jet', save_dir='', raw_image=False):
@@ -272,14 +274,15 @@ def plotImage(x,y,z, time=0, clim=[], cmap='jet', save_dir='', raw_image=False):
         plt.savefig('{}{}.png'.format(save_dir,time))
     return fig
 
-def plotEUVMask(m, time, euv_gradient=True, cmap='binary', lw=0.2):
+def plotEUVMask(m, time, euv_gradient=True, cmap='bone', lw=0.9):
     try:
         xgrid, ygrid, data = getEUVMask(time)
         x,y = m(xgrid, ygrid)
         if euv_gradient:
-            data = scipy.ndimage.filters.laplace(data)
-            levels = np.linspace(-.02,.02,10)
-            levels = [-.02, -.016,-.012, -.008, -.005, .005, .008, .012, .016, 0.020]
+            data = abs(scipy.ndimage.filters.laplace(data))
+            levels = np.linspace(0.006,.025,7)
+#            levels = [-.02, -.016,-.012, -.008, -.005, .005, .008, .012, .016, 0.020]
+#            levels = [.0055, .008, .012, .018, .025]
             m.contour(x,y,data.T, levels, cmap=cmap)
         else:
             levels = np.linspace(0,1,60)
@@ -322,7 +325,7 @@ def plotImageMap(fig,m,ax, xgrid,ygrid,z,time=0,clim=[],cmap='jet',
     if totality:
         m = plotTotalityMask(m, time)
     if euv_mask:
-        m = plotEUVMask(m, time, euv_gradient)
+        m = plotEUVMask(m, time, euv_gradient=euv_gradient)
     if moon:
         m = plotMoon(m, time)
     gca.set_clim(clim)
@@ -377,7 +380,7 @@ def singleImage(i):
     if scatter_plot:
         c = 0
         # Plot the background basemap 
-        fig, ax, m = plotMap(lonlim=xlimmap, latlim=ylimmap, totality=totality_mask, time=t[i])
+        fig, ax, m = plotMap(lonlim=xlimmap, latlim=ylimmap, totality=eclipse, time=t[i])
     for k in f.keys():
         if k != 'obstimes':
             # find index of the closest entry in the array to the given time index.
@@ -435,7 +438,7 @@ def singleImage(i):
             # Plot the Image
             fig, m, ax = plotImageMap(fig,m,ax,xgrid,ygrid,im,clim=clim,cmap='jet',time=t[i],
                              save_dir=save_dir, totality=totality_mask, euv_mask=euv_mask, 
-                             moon=moon)
+                             moon=moon, euv_gradient=euv_gradient)
 
         if raw_image:
             fig = plotImage(xgrid,ygrid,im,time=t[i],clim=clim, save_dir=save_dir,
@@ -443,6 +446,8 @@ def singleImage(i):
             # Close the figure handler
             plt.close(fig)
     else:
+        if totality_mask:
+            plotTotalityMask(m,t[i])
         checkImagePath(save_dir)
         plt.savefig('{}{}.png'.format(save_dir,t[i]))
 
